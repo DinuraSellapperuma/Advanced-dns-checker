@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Domain Checker - Modern Monochrome</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap");
+      body {
+        font-family: "Inter", sans-serif;
+      }
+    </style>
+  </head>
+  <body class="text-black">
+    <div class="min-h-screen border-t-4 border-black">
+      <!-- Header -->
+      <header class="max-w-4xl mx-auto pt-20 pb-16 px-6">
+        <h1 class="text-5xl font-bold tracking-tight">Domain Checker</h1>
+        <p class="mt-4 text-gray-600 text-lg">
+          Comprehensive DNS analysis with real-time status monitoring
+        </p>
+      </header>
+
+      <!-- Main Content -->
+      <main class="max-w-4xl mx-auto px-6">
+        <!-- Search Form -->
+        <div class="border-2 border-black p-8 mb-12">
+          <form id="domainForm" class="space-y-6">
+            <div>
+              <label for="domain" class="block text-sm font-medium">
+                Enter Domain Name
+              </label>
+              <div class="mt-2">
+                <input
+                  type="text"
+                  id="domain"
+                  class="block w-full px-4 py-3 border-2 border-black focus:ring-0 focus:outline-none"
+                  placeholder="example.com"
+                />
+              </div>
+            </div>
+            <button
+              type="submit"
+              class="w-full bg-black text-white px-6 py-3 font-medium hover:bg-gray-900 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black"
+            >
+              Check Domain
+            </button>
+          </form>
+        </div>
+
+        <!-- Loading Spinner -->
+        <div id="loading" class="hidden mb-12">
+          <div class="flex justify-center items-center p-8">
+            <div
+              class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-black"
+            ></div>
+          </div>
+        </div>
+
+        <!-- Quick Info Panel -->
+        <div id="quickInfo" class="hidden mb-12">
+          <div class="border-2 border-black p-8">
+            <h2 class="text-2xl font-semibold mb-8">Domain Overview</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+              <!-- Site Status -->
+              <div class="border border-gray-200 p-6">
+                <h3 class="font-medium mb-2">Site Status</h3>
+                <p id="siteStatus" class="text-lg"></p>
+              </div>
+              <!-- SSL Status -->
+              <div class="border border-gray-200 p-6">
+                <h3 class="font-medium mb-2">SSL Status</h3>
+                <p id="sslStatus" class="text-lg"></p>
+              </div>
+              <!-- IP Address -->
+              <div class="border border-gray-200 p-6">
+                <h3 class="font-medium mb-2">A Record IP</h3>
+                <p id="ipAddress" class="text-lg"></p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- DNS Records Section -->
+        <div id="dnsSection" class="hidden mb-12">
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-semibold">DNS Records</h2>
+            <button
+              id="copyAllBtn"
+              class="border-2 border-black px-6 py-2 font-medium hover:bg-black hover:text-white transition-colors"
+            >
+              Copy All Data
+            </button>
+          </div>
+          <div id="dnsRecords" class="space-y-8"></div>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      // Form, loading, results references
+      const domainForm = document.getElementById("domainForm");
+      const loadingDiv = document.getElementById("loading");
+      const quickInfoDiv = document.getElementById("quickInfo");
+      const dnsSectionDiv = document.getElementById("dnsSection");
+      const dnsRecordsDiv = document.getElementById("dnsRecords");
+
+      // Quick info fields
+      const siteStatusEl = document.getElementById("siteStatus");
+      const sslStatusEl = document.getElementById("sslStatus");
+      const ipAddressEl = document.getElementById("ipAddress");
+
+      // Copy All button
+      const copyAllBtn = document.getElementById("copyAllBtn");
+
+      // Data storage (to build "copy all" text):
+      let allResults = {
+        domain: "",
+        siteStatus: "",
+        sslStatus: "",
+        aRecordIP: "",
+        dns: {}, // each record type with an array of values
+      };
+
+      // Listen for form submit
+      domainForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const domainInput = document.getElementById("domain");
+        const domain = domainInput.value.trim();
+
+        // Clear old results + hide sections
+        resetDisplay();
+        allResults = {
+          domain,
+          siteStatus: "",
+          sslStatus: "",
+          aRecordIP: "",
+          dns: {},
+        };
+
+        // Validate domain
+        if (!validateDomain(domain)) {
+          alert("Please enter a valid domain name (e.g. example.com).");
+          return;
+        }
+
+        // Show loading
+        loadingDiv.classList.remove("hidden");
+
+        try {
+          // 1) Get DNS records from Google DNS
+          const recordTypes = [
+            "A",
+            "AAAA",
+            "MX",
+            "TXT",
+            "NS",
+            "SOA",
+            "CNAME",
+            "PTR",
+          ];
+          const dnsPromises = recordTypes.map((type) =>
+            fetch(`https://dns.google/resolve?name=${domain}&type=${type}`)
+              .then((res) => res.json())
+              .catch(() => null)
+          );
+          const dnsResults = await Promise.all(dnsPromises);
+
+          // 2) Extract the first A record IP
+          let aRecordIP = null;
+          if (dnsResults[0]?.Answer?.[0]?.data) {
+            aRecordIP = dnsResults[0].Answer[0].data;
+          }
+
+          // 3) Check if site is up
+          const isSiteUp = await checkSiteIsWorking(domain);
+
+          // 4) Check SSL
+          const isSSLValid = await checkSSL(domain);
+
+          // Update UI + allResults
+          siteStatusEl.innerHTML = isSiteUp
+            ? `<span class="text-green-600">●</span> Site is reachable`
+            : `<span class="text-red-600">●</span> Site not reachable`;
+
+          sslStatusEl.innerHTML = isSSLValid
+            ? `<span class="text-green-600">●</span> HTTPS OK`
+            : `<span class="text-red-600">●</span> No valid HTTPS`;
+
+          ipAddressEl.textContent = aRecordIP || "No A record found";
+
+          allResults.siteStatus = isSiteUp
+            ? "Site is reachable"
+            : "Site not reachable";
+          allResults.sslStatus = isSSLValid ? "HTTPS OK" : "No valid HTTPS";
+          allResults.aRecordIP = aRecordIP || "No A record found";
+
+          quickInfoDiv.classList.remove("hidden");
+
+          // DNS
+          displayDNSRecords(recordTypes, dnsResults);
+          dnsSectionDiv.classList.remove("hidden");
+        } catch (err) {
+          console.error(err);
+          alert("Something went wrong. Please try again.");
+        } finally {
+          loadingDiv.classList.add("hidden");
+        }
+      });
+
+      function resetDisplay() {
+        dnsRecordsDiv.innerHTML = "";
+        quickInfoDiv.classList.add("hidden");
+        dnsSectionDiv.classList.add("hidden");
+        siteStatusEl.textContent = "";
+        sslStatusEl.textContent = "";
+        ipAddressEl.textContent = "";
+      }
+
+      function validateDomain(domain) {
+        const domainRegex =
+          /^(?!:\/\/)([a-zA-Z0-9-_]+\.)*[a-zA-Z0-9-_]+\.[a-zA-Z]{2,11}?$/;
+        return domainRegex.test(domain);
+      }
+
+      function displayDNSRecords(recordTypes, dnsResults) {
+        dnsRecordsDiv.innerHTML = "";
+        recordTypes.forEach((type, index) => {
+          const data = dnsResults[index];
+          dnsRecordsDiv.appendChild(createDnsRecordCard(type, data));
+        });
+      }
+
+      function createDnsRecordCard(type, data) {
+        const card = document.createElement("div");
+        card.className = "border-2 border-black p-8";
+
+        const answers = data?.Answer || [];
+        const recordCount = answers.length;
+        let recordHTML = "";
+
+        const recordValues = [];
+
+        if (recordCount > 0) {
+          answers.forEach((ans) => {
+            let recordValue = ans.data;
+            if (type === "MX") {
+              const [priority, server] = ans.data.split(" ");
+              recordValue = `Priority: ${priority}, Server: ${server}`;
+            }
+            recordValues.push(recordValue);
+
+            recordHTML += `
+              <div class="flex justify-between items-center py-3 border-b border-gray-200">
+                <p class="text-gray-900 flex-1">${recordValue}</p>
+                <button
+                  class="copy-btn ml-4 text-sm underline hover:no-underline"
+                  data-copy="${recordValue}"
+                >
+                  Copy
+                </button>
+              </div>
+            `;
+          });
+        } else {
+          recordHTML = '<p class="text-gray-500">No records found</p>';
+        }
+
+        allResults.dns[type] = recordValues;
+
+        card.innerHTML = `
+          <div class="flex items-center justify-between mb-6">
+            <h3 class="text-xl font-semibold">${type} Records</h3>
+            <span class="border border-gray-400 px-3 py-1 text-sm">
+              ${recordCount} records
+            </span>
+          </div>
+          <div class="space-y-2">
+            ${recordHTML}
+          </div>
+        `;
+        return card;
+      }
+
+      //
+      // ───────────────────────────────────────────────────────────────────────────────────────────
+      //   >>> Site Check: Uses GET + favicon.ico to avoid HEAD/CORS issues for HTTP-only sites
+      // ───────────────────────────────────────────────────────────────────────────────────────────
+      //
+      async function checkSiteIsWorking(domain) {
+        // 1) Try HTTPS
+        const httpsOK = await tryFetch(`https://${domain}`);
+        if (httpsOK) return true;
+
+        // 2) If HTTPS fails, fallback to HTTP
+        //    - This will be BLOCKED if your page is served over HTTPS (mixed content).
+        return await tryFetch(`http://${domain}`);
+      }
+
+      async function checkSSL(domain) {
+        // If the HTTPS fetch works, SSL is good
+        return await tryFetch(`https://${domain}`);
+      }
+
+      /**
+       * Attempts a GET request to favicon.ico with no-cors.
+       * If it fails (network error, DNS error), returns false.
+       * If it’s blocked by browser security (mixed content), also fails.
+       * Otherwise, returns true.
+       */
+      async function tryFetch(baseUrl) {
+        try {
+          // Add a trailing slash if missing, then try a known small file (favicon.ico)
+          let testUrl = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
+          testUrl += "favicon.ico";
+          await fetch(testUrl, { method: "GET", mode: "no-cors" });
+          return true;
+        } catch (err) {
+          return false;
+        }
+      }
+
+      // Copy functionality
+      dnsRecordsDiv.addEventListener("click", (e) => {
+        if (e.target.classList.contains("copy-btn")) {
+          const textToCopy = e.target.dataset.copy;
+          copyToClipboard(textToCopy);
+        }
+      });
+
+      copyAllBtn.addEventListener("click", () => {
+        let textBlock = `Domain: ${allResults.domain}\n\n`;
+        textBlock += `Site Status: ${allResults.siteStatus}\n`;
+        textBlock += `SSL Status: ${allResults.sslStatus}\n`;
+        textBlock += `A Record IP: ${allResults.aRecordIP}\n\n`;
+
+        textBlock += "DNS Records:\n";
+        for (const [type, values] of Object.entries(allResults.dns)) {
+          textBlock += `  ${type} (${values.length}):\n`;
+          if (values.length > 0) {
+            values.forEach((v) => (textBlock += `    - ${v}\n`));
+          } else {
+            textBlock += "    - No records\n";
+          }
+        }
+
+        copyToClipboard(textBlock);
+      });
+
+      function copyToClipboard(text) {
+        navigator.clipboard
+          .writeText(text)
+          .then(() => {
+            alert("Copied to clipboard!");
+          })
+          .catch((err) => {
+            console.error("Failed to copy:", err);
+          });
+      }
+    </script>
+  </body>
+</html>
